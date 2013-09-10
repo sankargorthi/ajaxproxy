@@ -7,11 +7,10 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.PrintWriter;
 import java.util.ArrayList;
+import java.util.Enumeration;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.concurrent.Semaphore;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 import javax.servlet.Filter;
 import javax.servlet.FilterChain;
@@ -21,6 +20,7 @@ import javax.servlet.ServletInputStream;
 import javax.servlet.ServletOutputStream;
 import javax.servlet.ServletRequest;
 import javax.servlet.ServletResponse;
+import javax.servlet.http.Cookie;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletRequestWrapper;
 import javax.servlet.http.HttpServletResponse;
@@ -34,14 +34,11 @@ public class APFilter implements Filter {
 	private int maxBitrate = 0; // in KBps
 	private int forcedLatency = 50;
 	private boolean logRequests = false;
-	private boolean extendedLogging = false;
 	private String appendToPath = "";
 	private Semaphore throttleLock;
-	private Pattern logExpression;
-	private Pattern contentExpression;
 	private List<AccessTracker> trackers = new ArrayList<AccessTracker>();
 	private Thread trackerThread;
-	private List<TrackItem> trackBuffer = new LinkedList<TrackItem>();
+	private List<LoadedResource> trackBuffer = new LinkedList<LoadedResource>();
 
 	@Override
 	public void destroy() {
@@ -54,90 +51,76 @@ public class APFilter implements Filter {
 	public void doFilter(ServletRequest request, ServletResponse response,
 			FilterChain chain) throws IOException, ServletException {
 		if (request instanceof HttpServletRequest) {
-			HttpServletRequest httpRequest = (HttpServletRequest) request;
-			HttpServletResponse httpResponse = (HttpServletResponse) response;
-			MyServletRequestWrapper reqWrapper = new MyServletRequestWrapper(
-					httpRequest);
-			MyServletResponseWrapper wrapper = new MyServletResponseWrapper(
-					httpResponse);
-			StringBuffer sb = new StringBuffer();
-			boolean stillLogRequests = logRequests;
-			String url = httpRequest.getRequestURI();
-
-			//TODO: duration
-			trackAccess(url, 0);
-
-			if (stillLogRequests) {
-				if (logExpression != null) {
-					Matcher matcher = logExpression.matcher(url);
-					stillLogRequests = matcher.matches();
-				}
-			}
-			if (stillLogRequests) {
-				String method = httpRequest.getMethod();
-				sb.append(method);
-				sb.append(" ");
-				sb.append(url);
-				String qs = httpRequest.getQueryString();
-				if (null != qs && !"".equals(qs))
-					sb.append("?" + qs);
-				if (("POST".equals(method) || "PUT".equals(method))
-						&& extendedLogging) {
-					sb.append("\nInput:\n");
-					StringBuffer inputBuffer = new StringBuffer();
-					@SuppressWarnings("unchecked")
-					List<String> lines = IOUtils.readLines(reqWrapper
-							.getClonedInputStream());
-					for (String line : lines) {
-						inputBuffer.append(line);
-						inputBuffer.append("\n");
-					}
-					sb.append(inputBuffer.toString().trim());
-				}
-			}
-
-			if (forcedLatency > 0) {
-				try {
-					Thread.sleep(this.forcedLatency);
-				} catch (InterruptedException e) {
-					// we probably don't need to continue processing
-					return;
-				}
-			}
-			chain.doFilter(reqWrapper, wrapper);
-			throttledCopy(wrapper.getNewInputStream(),
-					response.getOutputStream());
-
-			if (stillLogRequests) {
-				StringBuffer outputBuffer = null;
-				if (extendedLogging || contentExpression != null) {
-					@SuppressWarnings("unchecked")
-					List<String> lines = IOUtils.readLines(wrapper
-							.getNewInputStream());
-					outputBuffer = new StringBuffer();
-					for (String line : lines) {
-						outputBuffer.append(line);
-						outputBuffer.append("\n");
-					}
-				}
-				if (contentExpression != null) {
-					Matcher matcher = contentExpression.matcher(outputBuffer
-							.toString());
-					stillLogRequests = matcher.matches();
-				}
-				if (extendedLogging) {
-					sb.append("\nOutput:\n");
-					sb.append(outputBuffer.toString().trim());
-					sb.append("\n"); // extra line to make it easier to read
-				}
-			}
-
-			if (stillLogRequests) {
-				log.info(sb.toString());
-			}
+			doFilterInternal(request, response, chain);
 		} else {
 			chain.doFilter(request, response);
 		}
+	}
+
+	public void doFilterInternal(ServletRequest request,
+			ServletResponse response, FilterChain chain) throws IOException,
+			ServletException {
+		LoadedResource resource = new LoadedResource();
+		long start = System.currentTimeMillis();
+
+		HttpServletRequest httpRequest = (HttpServletRequest) request;
+		HttpServletResponse httpResponse = (HttpServletResponse) response;
+		MyServletRequestWrapper reqWrapper = new MyServletRequestWrapper(
+				httpRequest);
+		MyServletResponseWrapper wrapper = new MyServletResponseWrapper(
+				httpResponse);
+		String url = httpRequest.getRequestURI();
+		String qs = httpRequest.getQueryString();
+		if (null != qs && !"".equals(qs))
+			url += "?" + qs;
+		resource.setUrl(url);
+
+		String method = httpRequest.getMethod();
+		resource.setMethod(method);
+
+		// read input
+		if (("POST".equals(method) || "PUT".equals(method))) {
+			ByteArrayOutputStream baos = new ByteArrayOutputStream();
+			IOUtils.copy(reqWrapper.getClonedInputStream(), baos);
+			resource.setInput(baos.toByteArray());
+		}
+
+		Enumeration<?> headerNames = reqWrapper.getHeaderNames();
+		while (headerNames.hasMoreElements()) {
+			String name = (String) headerNames.nextElement();
+			resource.addHeader(name, reqWrapper.getHeader(name));
+		}
+
+		if (forcedLatency > 0) {
+			try {
+				Thread.sleep(this.forcedLatency);
+			} catch (InterruptedException e) {
+				// we probably don't need to continue processing
+				return;
+			}
+		}
+		chain.doFilter(reqWrapper, wrapper);
+		throttledCopy(wrapper.getNewInputStream(), response.getOutputStream());
+
+		resource.setStatusCode(wrapper.getStatus());
+
+		// read cookies
+		Cookie[] cookies = ((HttpServletRequest) request).getCookies();
+		if (cookies != null && cookies.length > 0) {
+			ArrayList<Cookie> cs = new ArrayList<Cookie>();
+			for (Cookie c : cookies) {
+				cs.add(c);
+			}
+			resource.setCookies(new ArrayList<Cookie>());
+		}
+
+		// read output
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		IOUtils.copy(wrapper.getNewInputStream(), baos);
+		resource.setOutput(baos.toByteArray());
+
+		resource.setDuration(System.currentTimeMillis() - start);
+		trackAccess(resource);
 	}
 
 	@Override
@@ -148,7 +131,7 @@ public class APFilter implements Filter {
 			public void run() {
 				try {
 					while (!Thread.interrupted()) {
-						List<TrackItem> localBuffer = new ArrayList<TrackItem>();
+						List<LoadedResource> localBuffer = new ArrayList<LoadedResource>();
 						synchronized (trackBuffer) {
 							if (trackBuffer.isEmpty())
 								trackBuffer.wait();
@@ -156,9 +139,13 @@ public class APFilter implements Filter {
 								localBuffer.add(trackBuffer.remove(0));
 						}
 
-						for (TrackItem ti : localBuffer) {
+						for (LoadedResource ti : localBuffer) {
 							for (AccessTracker at : trackers) {
-								at.trackFile(ti.file, ti.duration);
+								try {
+									at.trackFile(ti);
+								} catch (Exception e) {
+									log.error(e.getMessage(), e);
+								}
 							}
 						}
 					}
@@ -275,6 +262,7 @@ public class APFilter implements Filter {
 		private ByteArrayOutputStream baos;
 		private PrintWriter writer;
 		private MyServletOutputStream os;
+		private int httpStatus = 200;
 
 		public MyServletResponseWrapper(HttpServletResponse response) {
 			super(response);
@@ -301,6 +289,40 @@ public class APFilter implements Filter {
 
 		public ByteArrayInputStream getNewInputStream() {
 			return new ByteArrayInputStream(baos.toByteArray());
+		}
+
+		@Override
+		public void reset() {
+			super.reset();
+			this.httpStatus = SC_OK;
+		}
+
+		@Override
+		public void sendError(int sc) throws IOException {
+			httpStatus = sc;
+			super.sendError(sc);
+		}
+
+		@Override
+		public void sendRedirect(String location) throws IOException {
+			httpStatus = 302;
+			super.sendRedirect(location);
+		}
+
+		@Override
+		public void sendError(int sc, String msg) throws IOException {
+			httpStatus = sc;
+			super.sendError(sc, msg);
+		}
+
+		@Override
+		public void setStatus(int sc) {
+			httpStatus = sc;
+			super.setStatus(sc);
+		}
+
+		public int getStatus() {
+			return httpStatus;
 		}
 	}
 
@@ -333,42 +355,15 @@ public class APFilter implements Filter {
 		this.appendToPath = appendToPath;
 	}
 
-	public boolean isExtendedLogging() {
-		return extendedLogging;
-	}
-
-	public void setExtendedLogging(boolean extendedLogging) {
-		this.extendedLogging = extendedLogging;
-	}
-
-	public void setLogExpression(Pattern logExpression) {
-		this.logExpression = logExpression;
-	}
-
-	public Pattern getContentExpression() {
-		return contentExpression;
-	}
-
-	public void setContentExpression(Pattern contentExpression) {
-		this.contentExpression = contentExpression;
-	}
-
 	public void add(AccessTracker tracker) {
 		trackers.add(tracker);
 	}
 
-	private void trackAccess(String path, int duration) {
-		TrackItem ti = new TrackItem();
-		ti.file = path;
-		ti.duration = duration;
+	private void trackAccess(LoadedResource resource) {
 		synchronized (trackBuffer) {
-			trackBuffer.add(ti);
+			trackBuffer.add(resource);
 			trackBuffer.notify();
 		}
 	}
-	
-	private class TrackItem {
-		public String file;
-		public int duration;
-	}
+
 }

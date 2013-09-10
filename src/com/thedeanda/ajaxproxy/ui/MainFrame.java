@@ -1,6 +1,7 @@
 package com.thedeanda.ajaxproxy.ui;
 
 import java.awt.AWTException;
+import java.awt.Dimension;
 import java.awt.Image;
 import java.awt.MenuItem;
 import java.awt.PopupMenu;
@@ -9,6 +10,7 @@ import java.awt.Toolkit;
 import java.awt.TrayIcon;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
+import java.awt.event.KeyEvent;
 import java.awt.event.MouseEvent;
 import java.awt.event.MouseListener;
 import java.io.File;
@@ -33,7 +35,9 @@ import javax.swing.JMenu;
 import javax.swing.JMenuBar;
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
+import javax.swing.KeyStroke;
 
+import net.sourceforge.javajson.JsonArray;
 import net.sourceforge.javajson.JsonException;
 import net.sourceforge.javajson.JsonObject;
 import net.sourceforge.javajson.JsonValue;
@@ -115,6 +119,7 @@ public class MainFrame extends JFrame implements ProxyListener {
 		URL imgUrl = ClassLoader.getSystemClassLoader().getResource("icon.png");
 		this.image = Toolkit.getDefaultToolkit().getImage(imgUrl);
 		this.setIconImage(image);
+		setPreferredSize(new Dimension(980, 700));
 	}
 
 	private void initTray() {
@@ -172,7 +177,6 @@ public class MainFrame extends JFrame implements ProxyListener {
 					if (self.isVisible()) {
 						self.requestFocus();
 					}
-					
 
 					// trayIcon.displayMessage("Action Event",
 					// "An Action Event Has Been Performed!",
@@ -199,9 +203,13 @@ public class MainFrame extends JFrame implements ProxyListener {
 		JMenuItem mi;
 
 		menu = new JMenu("File");
+		menu.setMnemonic(KeyEvent.VK_F);
 		mb.add(menu);
 
 		mi = new JMenuItem("New");
+		mi.setMnemonic(KeyEvent.VK_N);
+		mi.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_N,
+				ActionEvent.CTRL_MASK));
 		mi.addActionListener(new ActionListener() {
 			@Override
 			public void actionPerformed(ActionEvent ae) {
@@ -211,6 +219,9 @@ public class MainFrame extends JFrame implements ProxyListener {
 		menu.add(mi);
 
 		mi = new JMenuItem("Open");
+		mi.setMnemonic(KeyEvent.VK_O);
+		mi.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_O,
+				ActionEvent.CTRL_MASK));
 		mi.addActionListener(new ActionListener() {
 			@Override
 			public void actionPerformed(ActionEvent ae) {
@@ -236,6 +247,9 @@ public class MainFrame extends JFrame implements ProxyListener {
 		menu.addSeparator();
 
 		mi = new JMenuItem("Save");
+		mi.setMnemonic(KeyEvent.VK_S);
+		mi.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_S,
+				ActionEvent.CTRL_MASK));
 		saveMenuItem = mi;
 		mi.addActionListener(new ActionListener() {
 			@Override
@@ -260,6 +274,7 @@ public class MainFrame extends JFrame implements ProxyListener {
 		menu.addSeparator();
 
 		mi = new JMenuItem("Exit");
+		mi.setMnemonic(KeyEvent.VK_X);
 		mi.addActionListener(new ActionListener() {
 			@Override
 			public void actionPerformed(ActionEvent ae) {
@@ -278,14 +293,21 @@ public class MainFrame extends JFrame implements ProxyListener {
 		};
 
 		menu = new JMenu("Server");
+		menu.setMnemonic(KeyEvent.VK_S);
 		mb.add(menu);
-		this.startServerMenuItem2 = new JMenuItem("Start Server");
-		startServerMenuItem2.addActionListener(menuItemListener);
-		menu.add(startServerMenuItem2);
+		this.startServerMenuItem2 = mi = new JMenuItem("Start Server");
+		mi.setMnemonic(KeyEvent.VK_A);
+		mi.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_1,
+				ActionEvent.CTRL_MASK));
+		mi.addActionListener(menuItemListener);
+		menu.add(mi);
 
-		this.stopServerMenuItem2 = new JMenuItem("Stop Server");
-		stopServerMenuItem2.addActionListener(menuItemListener);
-		menu.add(stopServerMenuItem2);
+		this.stopServerMenuItem2 = mi = new JMenuItem("Stop Server");
+		mi.setMnemonic(KeyEvent.VK_O);
+		mi.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_2,
+				ActionEvent.CTRL_MASK));
+		mi.addActionListener(menuItemListener);
+		menu.add(mi);
 
 	}
 
@@ -413,11 +435,13 @@ public class MainFrame extends JFrame implements ProxyListener {
 		recentMenu.removeAll();
 		recentFiles.clear();
 		if (settings != null) {
-			JsonObject json = settings;
-			for (JsonValue v : json.getJsonArray("recentFiles")) {
-				File rf = new File(v.getString());
-				if (rf.exists())
-					recentFiles.add(rf);
+			JsonArray array = settings.getJsonArray("recentFiles");
+			if (array != null) {
+				for (JsonValue v : array) {
+					File rf = new File(v.getString());
+					if (rf.exists())
+						recentFiles.add(rf);
+				}
 			}
 		}
 
