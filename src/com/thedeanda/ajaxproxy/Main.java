@@ -7,6 +7,9 @@ import java.io.OutputStream;
 import java.io.StringReader;
 import java.util.List;
 
+import javax.swing.SwingUtilities;
+import javax.swing.UIManager;
+
 import org.apache.commons.cli.CommandLine;
 import org.apache.commons.cli.CommandLineParser;
 import org.apache.commons.cli.GnuParser;
@@ -34,6 +37,7 @@ public class Main {
 
 			String config = cmd.getOptionValue('c', null);
 			String merge = cmd.getOptionValue('m', null);
+			boolean run = cmd.hasOption("r");
 			boolean rm = cmd.hasOption("rm");
 			boolean ignore = cmd.hasOption("i");
 
@@ -48,13 +52,14 @@ public class Main {
 			if (config != null && merge != null) {
 				runMerge(config, merge, rm, ignore);
 				return;
+			} else if (config != null && run) {
+				AjaxProxy ap = new AjaxProxy(config);
+				ap.run();
 			} else if (merge != null && config == null) {
 				printHelp(options);
 				return;
 			} else {
-				// show normal ui
-				MainFrame f = new MainFrame();
-				f.setVisible(true);
+				showUi();
 			}
 
 		} catch (ParseException exp) {
@@ -62,6 +67,25 @@ public class Main {
 			System.err.println("Parsing failed.  Reason: " + exp.getMessage());
 			printHelp(options);
 		}
+	}
+
+	private static void showUi() {
+		System.setProperty("apple.laf.useScreenMenuBar", "true");
+        System.setProperty("com.apple.mrj.application.apple.menu.about.name", "Ajaxproxy");
+		SwingUtilities.invokeLater(new Runnable() {
+			public void run() {
+				try {
+					// Set System L&F
+					UIManager.setLookAndFeel(UIManager
+							.getSystemLookAndFeelClassName());
+				} catch (Exception ex) {
+
+				}
+
+				MainFrame f = new MainFrame();
+				f.setVisible(true);
+			}
+		});
 	}
 
 	private static void printHelp(Options options) {
@@ -117,6 +141,7 @@ public class Main {
 	private static Options initOptions() {
 		Options options = new Options();
 
+		options.addOption("r", "run", false, "run ajaxproxy in headless mode");
 		options.addOption("h", "help", false, "print this message");
 		options.addOption("c", "config", true, "the config file");
 		options.addOption("m", "merge", true,
